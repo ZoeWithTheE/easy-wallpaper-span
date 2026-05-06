@@ -10,10 +10,14 @@ if ! command -v pipx >/dev/null 2>&1; then
 fi
 
 # Install or upgrade the tool
-pipx install git+https://github.com/ZoeWithTheE/easy-wallpaper-span 2>/dev/null \
-  || pipx upgrade easy-wallpaper-span
+if pipx list | grep -q easy-wallpaper-span; then
+    pipx upgrade easy-wallpaper-span
+else
+    pipx install git+https://github.com/ZoeWithTheE/easy-wallpaper-span
+fi
 
 # Register KDE autostart so the wallpaper is restored on login
+mkdir -p "$HOME/.config/autostart"
 AUTOSTART="$HOME/.config/autostart/easy-wallpaper-span.desktop"
 cat > "$AUTOSTART" <<EOF
 [Desktop Entry]
