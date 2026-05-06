@@ -1,6 +1,20 @@
 #!/bin/sh
 set -e
 
+# Install xrandr if not present
+if ! command -v xrandr >/dev/null 2>&1; then
+    echo "Installing xrandr..."
+    if command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm xorg-xrandr
+    elif command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y x11-xserver-utils
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y xrandr
+    else
+        echo "Warning: could not install xrandr automatically. Please install it manually for your distro."
+    fi
+fi
+
 # Install pipx if not present
 if ! command -v pipx >/dev/null 2>&1; then
     echo "Installing pipx..."
