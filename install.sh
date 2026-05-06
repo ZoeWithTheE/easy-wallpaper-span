@@ -3,14 +3,36 @@ set -e
 
 # Install pipx if not present
 if ! command -v pipx >/dev/null 2>&1; then
-    echo "pipx not found, installing..."
+    echo "Installing pipx..."
     python3 -m pip install --user pipx
     python3 -m pipx ensurepath
     export PATH="$PATH:$HOME/.local/bin"
 fi
 
-pipx install git+https://github.com/ZoeWithTheE/easy-wallpaper-span
+# Install or upgrade the tool
+pipx install git+https://github.com/ZoeWithTheE/easy-wallpaper-span 2>/dev/null \
+  || pipx upgrade easy-wallpaper-span
+
+# Register KDE autostart so the wallpaper is restored on login
+AUTOSTART="$HOME/.config/autostart/easy-wallpaper-span.desktop"
+cat > "$AUTOSTART" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Easy Wallpaper Span
+Exec=sh -c 'sleep 5 && easy-wallpaper-span restore'
+Hidden=false
+X-KDE-autostart-phase=2
+EOF
 
 echo ""
-echo "Installed. Run: easy-wallpaper-span"
-echo "If the command is not found, restart your shell or run: source ~/.bashrc"
+echo "Done. Run: easy-wallpaper-span"
+echo "Wallpaper will restore automatically on login."
+echo ""
+echo "Commands:"
+echo "  easy-wallpaper-span                   open GUI"
+echo "  easy-wallpaper-span apply IMAGE       apply without GUI"
+echo "  easy-wallpaper-span apply -p NAME     apply a saved profile"
+echo "  easy-wallpaper-span restore           re-apply last wallpaper"
+echo "  easy-wallpaper-span profiles          list saved profiles"
+echo "  easy-wallpaper-span save NAME         save current state as profile"
+echo "  easy-wallpaper-span delete NAME       delete a profile"
