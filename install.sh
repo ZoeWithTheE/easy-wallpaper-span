@@ -5,7 +5,7 @@ set -e
 if ! command -v xrandr >/dev/null 2>&1; then
     echo "Installing xrandr..."
     if command -v pacman >/dev/null 2>&1; then
-        sudo pacman -S --noconfirm xorg-xrandr
+        sudo pacman -Sy --noconfirm xorg-xrandr
     elif command -v apt-get >/dev/null 2>&1; then
         sudo apt-get install -y x11-xserver-utils
     elif command -v dnf >/dev/null 2>&1; then
