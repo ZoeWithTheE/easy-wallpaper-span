@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = ["PyQt6>=6.4"]
 
 [project.scripts]
-easy-wallpaper-span = "easy_wallpaper_span.gui:main"
+easy-wallpaper-span = "easy_wallpaper_span.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
