@@ -37,7 +37,7 @@ cat > "$AUTOSTART" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Easy Wallpaper Span
-Exec=sh -c 'sleep 5 && easy-wallpaper-span restore'
+Exec=sh -c 'sleep 10 && easy-wallpaper-span restore'
 Hidden=false
 X-KDE-autostart-phase=2
 EOF
