@@ -1,6 +1,14 @@
 import sys, os, re, math, copy, shutil, time, shlex, subprocess, json, argparse
 from pathlib import Path
 
+def detect_session():
+    if os.environ.get('HYPRLAND_INSTANCE_SIGNATURE'):
+        return 'hyprland'
+    desktop = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
+    if 'kde' in desktop or 'plasma' in desktop:
+        return 'kde'
+    return 'x11'
+
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -66,7 +74,7 @@ def _migrate_data_dir():
 
 # ── monitor helpers ───────────────────────────────────────────────────────────
 
-def read_monitors():
+def read_monitors_xrandr():
     rotations={}; native_mm={}
     for line in subprocess.check_output(["xrandr"]).decode().splitlines():
         m = re.match(r'^(\S+) connected(?: primary)?\s+\d+x\d+\+\d+\+\d+\s+'
@@ -86,6 +94,26 @@ def read_monitors():
                              w=int(pw),h=int(ph),phys_w=int(pw),phys_h=int(ph),
                              phys_w_mm=float(wmm),phys_h_mm=float(hmm),rotation=rot))
     return mons
+
+def read_monitors_hyprland():
+    data=json.loads(subprocess.check_output(['hyprctl','monitors','-j']).decode())
+    mons=[]
+    for m in data:
+        scale=float(m.get('scale',1.0))
+        pw,ph=m['width'],m['height']
+        # transforms 1,3,5,7 are 90/270° rotations — swap logical dimensions
+        if m.get('transform',0) in (1,3,5,7): pw,ph=ph,pw
+        lw=round(pw/scale); lh=round(ph/scale)
+        mons.append(dict(name=m['name'],x=m['x'],y=m['y'],
+                         screen_x=m['x'],screen_y=m['y'],
+                         w=lw,h=lh,phys_w=pw,phys_h=ph,
+                         phys_w_mm=0.0,phys_h_mm=0.0,
+                         scale=scale,rotation='normal'))
+    return mons
+
+def read_monitors():
+    if detect_session()=='hyprland': return read_monitors_hyprland()
+    return read_monitors_xrandr()
 
 def merge_monitors(sys_mons, saved_list):
     saved={d['name']:d for d in saved_list}
@@ -156,30 +184,44 @@ def delete_profile(name):
 
 # ── core apply ────────────────────────────────────────────────────────────────
 
-def _apply_mon_set(mon_list, img, ox, oy, out_crops, ts):
+def _apply_mon_set(mon_list, img, ox, oy, out_crops, ts, use_physical=False):
     if not mon_list or not img or not os.path.isfile(img): return
     tx=min(m['x'] for m in mon_list); ty=min(m['y'] for m in mon_list)
     tw=max(m['x']+m['w'] for m in mon_list)-tx
     th=max(m['y']+m['h'] for m in mon_list)-ty
-    sw=tw+2*abs(ox); sh=th+2*abs(oy)
     uid=abs(hash(f"{img}{ox}{oy}{''.join(m['name'] for m in mon_list)}"))%100000
     scaled=WALL_DIR/f'scaled_{ts}_{uid}.jpg'
-    r=subprocess.run(['magick',img,'-resize',f'{sw}x{sh}^','-gravity','Center',
-                      '-crop',f'{tw}x{th}+{ox}+{oy}','+repage',str(scaled)],capture_output=True)
-    if r.returncode: return
-    for m in mon_list:
-        mx=m['x']-tx; my=m['y']-ty
-        cp=WALL_DIR/f"crop_{m['x']}_{m['y']}_{ts}.jpg"
-        subprocess.run(['magick',str(scaled),'-crop',f"{m['w']}x{m['h']}+{mx}+{my}",'+repage',str(cp)],check=True)
-        out_crops[(m.get('screen_x',m['x']),m.get('screen_y',m['y']))]=str(cp)
+    if use_physical:
+        # Scale span image to the max physical resolution for HiDPI-correct crops
+        sc=max(m.get('scale',1.0) for m in mon_list)
+        ptw=round(tw*sc); pth=round(th*sc)
+        psw=ptw+2*round(abs(ox)*sc); psh=pth+2*round(abs(oy)*sc)
+        r=subprocess.run(['magick',img,'-resize',f'{psw}x{psh}^','-gravity','Center',
+                          '-crop',f'{ptw}x{pth}+{round(ox*sc)}+{round(oy*sc)}',
+                          '+repage',str(scaled)],capture_output=True)
+        if r.returncode: return
+        for m in mon_list:
+            mx=round((m['x']-tx)*sc); my=round((m['y']-ty)*sc)
+            pw=m.get('phys_w',round(m['w']*sc)); ph=m.get('phys_h',round(m['h']*sc))
+            cp=WALL_DIR/f"crop_{m['x']}_{m['y']}_{ts}.jpg"
+            subprocess.run(['magick',str(scaled),'-crop',f"{pw}x{ph}+{mx}+{my}",'+repage',str(cp)],check=True)
+            out_crops[(m.get('screen_x',m['x']),m.get('screen_y',m['y']))]=str(cp)
+    else:
+        sw=tw+2*abs(ox); sh=th+2*abs(oy)
+        r=subprocess.run(['magick',img,'-resize',f'{sw}x{sh}^','-gravity','Center',
+                          '-crop',f'{tw}x{th}+{ox}+{oy}','+repage',str(scaled)],capture_output=True)
+        if r.returncode: return
+        for m in mon_list:
+            mx=m['x']-tx; my=m['y']-ty
+            cp=WALL_DIR/f"crop_{m['x']}_{m['y']}_{ts}.jpg"
+            subprocess.run(['magick',str(scaled),'-crop',f"{m['w']}x{m['h']}+{mx}+{my}",'+repage',str(cp)],check=True)
+            out_crops[(m.get('screen_x',m['x']),m.get('screen_y',m['y']))]=str(cp)
 
-def apply_state(state, save_conf=True):
+def _build_crops(state, ts, use_physical=False):
     ms=state['monitors']; groups_cfg={g['name']:g for g in state.get('groups',[])}
     WALL_DIR.mkdir(parents=True,exist_ok=True)
     for f in WALL_DIR.glob('crop_*.jpg'): f.unlink(missing_ok=True)
-    ts=int(time.time()); crops={}
-    disabled_ms=[m for m in ms if _mon_disabled(m, groups_cfg)]
-    disabled_set=set((m.get('screen_x',m['x']),m.get('screen_y',m['y'])) for m in disabled_ms)
+    crops={}
     active_ms=[m for m in ms if not _mon_disabled(m, groups_cfg)]
     override_ms=[m for m in active_ms if m.get('override')]
     group_ms={}
@@ -187,18 +229,24 @@ def apply_state(state, save_conf=True):
         if not m.get('override') and m.get('group'):
             group_ms.setdefault(m['group'],[]).append(m)
     global_ms=[m for m in active_ms if not m.get('override') and not m.get('group')]
-    # Groups with no image fall back to the global image
     for gname,gmons in list(group_ms.items()):
         g=groups_cfg.get(gname,{}); gi=g.get('img','')
         if not gi or not os.path.isfile(gi):
             global_ms.extend(gmons); del group_ms[gname]
-    _apply_mon_set(global_ms,state.get('img',''),state.get('ox',0),state.get('oy',0),crops,ts)
+    _apply_mon_set(global_ms,state.get('img',''),state.get('ox',0),state.get('oy',0),crops,ts,use_physical)
     for gname,gmons in group_ms.items():
         g=groups_cfg.get(gname,{})
-        _apply_mon_set(gmons,g.get('img',''),g.get('ox',0),g.get('oy',0),crops,ts)
+        _apply_mon_set(gmons,g.get('img',''),g.get('ox',0),g.get('oy',0),crops,ts,use_physical)
     for m in override_ms:
         ov=m['override']
-        _apply_mon_set([m],ov.get('img',''),ov.get('ox',0),ov.get('oy',0),crops,ts)
+        _apply_mon_set([m],ov.get('img',''),ov.get('ox',0),ov.get('oy',0),crops,ts,use_physical)
+    return crops
+
+def _apply_state_kde(state, ts):
+    ms=state['monitors']; groups_cfg={g['name']:g for g in state.get('groups',[])}
+    crops=_build_crops(state,ts)
+    disabled_ms=[m for m in ms if _mon_disabled(m, groups_cfg)]
+    disabled_set=set((m.get('screen_x',m['x']),m.get('screen_y',m['y'])) for m in disabled_ms)
     if not crops and not disabled_ms:
         raise RuntimeError("No wallpaper images applied (check image paths).")
     lines=['var dl=desktops();','for(var i=0;i<dl.length;i++){',
@@ -220,8 +268,45 @@ def apply_state(state, save_conf=True):
                       'org.kde.PlasmaShell.evaluateScript','\n'.join(lines)],
                      capture_output=True,text=True)
     if r.returncode: raise RuntimeError(r.stderr or r.stdout)
+
+def _apply_state_hyprland(state, ts):
+    ms=state['monitors']; groups_cfg={g['name']:g for g in state.get('groups',[])}
+    crops=_build_crops(state,ts,use_physical=True)
+    if not crops:
+        raise RuntimeError("No wallpaper images applied (check image paths).")
+    # map (screen_x,screen_y) -> monitor name
+    pos_to_name={( m.get('screen_x',m['x']), m.get('screen_y',m['y']) ):m['name']
+                 for m in ms if not _mon_disabled(m,groups_cfg)}
+    name_crops={pos_to_name[pos]:path for pos,path in crops.items() if pos in pos_to_name}
+    if shutil.which('swww'):
+        _hypr_set_swww(name_crops)
+    elif shutil.which('hyprpaper') or shutil.which('hyprctl'):
+        _hypr_set_hyprpaper(name_crops)
+    else:
+        raise RuntimeError(
+            "No Hyprland wallpaper tool found. Install 'swww' or 'hyprpaper' and make sure it's running.")
+
+def _hypr_set_swww(name_crops):
+    for mon,path in name_crops.items():
+        r=subprocess.run(['swww','img','--outputs',mon,path],capture_output=True,text=True)
+        if r.returncode: raise RuntimeError(f"swww failed for {mon}: {r.stderr or r.stdout}")
+
+def _hypr_set_hyprpaper(name_crops):
+    for path in set(name_crops.values()):
+        r=subprocess.run(['hyprctl','hyprpaper','preload',path],capture_output=True,text=True)
+        if r.returncode: raise RuntimeError(f"hyprpaper preload failed: {r.stderr or r.stdout}")
+    for mon,path in name_crops.items():
+        r=subprocess.run(['hyprctl','hyprpaper','wallpaper',f'{mon},{path}'],
+                         capture_output=True,text=True)
+        if r.returncode: raise RuntimeError(f"hyprpaper set failed for {mon}: {r.stderr or r.stdout}")
+
+def apply_state(state, save_conf=True):
+    ts=int(time.time()); session=detect_session()
+    if session=='hyprland': _apply_state_hyprland(state,ts)
+    else: _apply_state_kde(state,ts)
     if save_conf:
-        img=state.get('img',''); ext=Path(img).suffix if img else '.jpg'
+        ms=state['monitors']; img=state.get('img','')
+        ext=Path(img).suffix if img else '.jpg'
         sc=WALL_DIR/f'source{ext}'
         if img and os.path.isfile(img) and img!=str(sc): shutil.copy2(img,sc)
         LAST_CFG.write_text(f"IMAGE={shlex.quote(str(sc) if img else '')}\n"
@@ -1199,7 +1284,7 @@ def _cli_restore():
 
 def run_cli(argv):
     p=argparse.ArgumentParser(prog='easy-wallpaper-span',
-                               description='Span a wallpaper across KDE Plasma monitors.')
+                               description='Span a wallpaper across monitors (KDE Plasma & Hyprland).')
     sub=p.add_subparsers(dest='cmd')
     pa=sub.add_parser('apply',help='Apply a wallpaper')
     pa.add_argument('image',nargs='?'); pa.add_argument('-x',type=int,default=0)

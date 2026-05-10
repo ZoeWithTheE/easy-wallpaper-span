@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "easy-wallpaper-span"
 version = "0.1.0"
-description = "Span a single wallpaper across multiple monitors in KDE Plasma"
+description = "Span a single wallpaper across multiple monitors (KDE Plasma & Hyprland)"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
