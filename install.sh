@@ -32,12 +32,8 @@ if ! command -v pipx >/dev/null 2>&1; then
     export PATH="$PATH:$HOME/.local/bin"
 fi
 
-# Install or upgrade the tool
-if pipx list | grep -q easy-wallpaper-span; then
-    pipx upgrade easy-wallpaper-span
-else
-    pipx install git+https://github.com/ZoeWithTheE/easy-wallpaper-span
-fi
+# Install or upgrade the tool (--force re-fetches from git every time)
+pipx install --force git+https://github.com/ZoeWithTheE/easy-wallpaper-span
 
 if [ "$IS_HYPRLAND" = "1" ]; then
     # Hyprland autostart
