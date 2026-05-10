@@ -228,10 +228,13 @@ def _apply_mon_set(mon_list, img, ox, oy, out_crops, ts):
     if r.returncode: return
     for m in mon_list:
         mx=round((m['x']-tx)*sc); my=round((m['y']-ty)*sc)
-        rw,rh=_render_res(m); pw,ph=_output_res(m)
+        # Crop at the monitor's actual pixel count in the scaled span image,
+        # then resize to the display's real resolution.
+        cw=round(m['w']*sc); ch=round(m['h']*sc)
+        pw,ph=_output_res(m)
         cp=WALL_DIR/f"crop_{m['x']}_{m['y']}_{ts}.jpg"
-        cmd=['magick',str(scaled),'-crop',f'{rw}x{rh}+{mx}+{my}','+repage']
-        if (rw,rh)!=(pw,ph):
+        cmd=['magick',str(scaled),'-crop',f'{cw}x{ch}+{mx}+{my}','+repage']
+        if (cw,ch)!=(pw,ph):
             cmd+=['-resize',f'{pw}x{ph}!']
         cmd.append(str(cp))
         subprocess.run(cmd,check=True)
@@ -913,8 +916,8 @@ class App(QMainWindow):
         self._lbl_phys=QLabel("—"); fmon.addRow("Display res:",self._lbl_phys)
         self._sp_rw=QSpinBox(); self._sp_rw.setRange(0,9999); self._sp_rw.setSpecialValueText("auto")
         self._sp_rh=QSpinBox(); self._sp_rh.setRange(0,9999); self._sp_rh.setSpecialValueText("auto")
-        self._sp_rw.setToolTip("Render width: crop at this resolution, then scale to display res. 0 = use display res.")
-        self._sp_rh.setToolTip("Render height: crop at this resolution, then scale to display res. 0 = use display res.")
+        self._sp_rw.setToolTip("Render width: sample the span image at this density before scaling to display res. Higher = better quality. 0 = use display res.")
+        self._sp_rh.setToolTip("Render height: sample the span image at this density before scaling to display res. Higher = better quality. 0 = use display res.")
         self._sp_rw.editingFinished.connect(self._mon_render_changed)
         self._sp_rh.editingFinished.connect(self._mon_render_changed)
         fmon.addRow("Render W:",self._sp_rw); fmon.addRow("Render H:",self._sp_rh)
