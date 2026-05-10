@@ -1,8 +1,14 @@
-import sys, os, re, math, copy, shutil, time, shlex, subprocess, json, argparse
+import sys, os, re, math, copy, shutil, time, shlex, subprocess, json, argparse, glob
 from pathlib import Path
 
 def detect_session():
     if os.environ.get('HYPRLAND_INSTANCE_SIGNATURE'):
+        return 'hyprland'
+    # Hyprland socket exists even when the env var isn't inherited (e.g. launched from .desktop)
+    uid = os.getuid()
+    hypr_socks = (glob.glob('/tmp/hypr/*/.socket.sock') +
+                  glob.glob(f'/run/user/{uid}/hypr/*/.socket.sock'))
+    if hypr_socks:
         return 'hyprland'
     desktop = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
     if 'kde' in desktop or 'plasma' in desktop:
