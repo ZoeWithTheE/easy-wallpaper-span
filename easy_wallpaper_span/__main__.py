@@ -2,15 +2,27 @@ import sys, os, re, math, copy, shutil, time, shlex, subprocess, json, argparse,
 from pathlib import Path
 
 def detect_session():
+    # Manual override: set EASY_WALLPAPER_BACKEND=hyprland|kde|x11
+    override = os.environ.get('EASY_WALLPAPER_BACKEND','').lower()
+    if override in ('hyprland','kde','x11'): return override
+    # Env var set by Hyprland for processes it launches
     if os.environ.get('HYPRLAND_INSTANCE_SIGNATURE'):
         return 'hyprland'
-    # Hyprland socket exists even when the env var isn't inherited (e.g. launched from .desktop)
+    # Socket file — exists even when env var isn't inherited (e.g. app launcher)
     uid = os.getuid()
     hypr_socks = (glob.glob('/tmp/hypr/*/.socket.sock') +
                   glob.glob(f'/run/user/{uid}/hypr/*/.socket.sock'))
     if hypr_socks:
         return 'hyprland'
-    desktop = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
+    # hyprctl live check — most reliable fallback
+    if shutil.which('hyprctl'):
+        try:
+            r = subprocess.run(['hyprctl','monitors'],capture_output=True,timeout=3)
+            if r.returncode==0 and b'Monitor' in r.stdout:
+                return 'hyprland'
+        except Exception:
+            pass
+    desktop = os.environ.get('XDG_CURRENT_DESKTOP','').lower()
     if 'kde' in desktop or 'plasma' in desktop:
         return 'kde'
     return 'x11'
