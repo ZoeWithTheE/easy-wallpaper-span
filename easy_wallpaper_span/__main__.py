@@ -46,7 +46,7 @@ DEF_COLORS = [
 # FACE_CORNERS[fi] = (ca, cb) into get_corners() [TL,TR,BL,BR]; fi: 0=top 1=right 2=bottom 3=left
 FACE_CORNERS = [(0,1),(1,3),(2,3),(0,2)]
 # fields copied into/out of saved monitor records
-MON_SAVE = ('x','y','w','h','pts','orig_rect','locked','color','group','override','disabled')
+MON_SAVE = ('x','y','w','h','pts','orig_rect','locked','color','group','override','disabled','render_w','render_h')
 
 
 # ── quad helpers ──────────────────────────────────────────────────────────────
@@ -202,40 +202,42 @@ def delete_profile(name):
 
 # ── core apply ────────────────────────────────────────────────────────────────
 
-def _apply_mon_set(mon_list, img, ox, oy, out_crops, ts, use_physical=False):
+def _apply_mon_set(mon_list, img, ox, oy, out_crops, ts):
     if not mon_list or not img or not os.path.isfile(img): return
     tx=min(m['x'] for m in mon_list); ty=min(m['y'] for m in mon_list)
     tw=max(m['x']+m['w'] for m in mon_list)-tx
     th=max(m['y']+m['h'] for m in mon_list)-ty
     uid=abs(hash(f"{img}{ox}{oy}{''.join(m['name'] for m in mon_list)}"))%100000
     scaled=WALL_DIR/f'scaled_{ts}_{uid}.jpg'
-    if use_physical:
-        # Scale span image to the max physical resolution for HiDPI-correct crops
-        sc=max(m.get('scale',1.0) for m in mon_list)
-        ptw=round(tw*sc); pth=round(th*sc)
-        psw=ptw+2*round(abs(ox)*sc); psh=pth+2*round(abs(oy)*sc)
-        r=subprocess.run(['magick',img,'-resize',f'{psw}x{psh}^','-gravity','Center',
-                          '-crop',f'{ptw}x{pth}+{round(ox*sc)}+{round(oy*sc)}',
-                          '+repage',str(scaled)],capture_output=True)
-        if r.returncode: return
-        for m in mon_list:
-            mx=round((m['x']-tx)*sc); my=round((m['y']-ty)*sc)
-            pw=m.get('phys_w',round(m['w']*sc)); ph=m.get('phys_h',round(m['h']*sc))
-            cp=WALL_DIR/f"crop_{m['x']}_{m['y']}_{ts}.jpg"
-            subprocess.run(['magick',str(scaled),'-crop',f"{pw}x{ph}+{mx}+{my}",'+repage',str(cp)],check=True)
-            out_crops[(m.get('screen_x',m['x']),m.get('screen_y',m['y']))]=str(cp)
-    else:
-        sw=tw+2*abs(ox); sh=th+2*abs(oy)
-        r=subprocess.run(['magick',img,'-resize',f'{sw}x{sh}^','-gravity','Center',
-                          '-crop',f'{tw}x{th}+{ox}+{oy}','+repage',str(scaled)],capture_output=True)
-        if r.returncode: return
-        for m in mon_list:
-            mx=m['x']-tx; my=m['y']-ty
-            cp=WALL_DIR/f"crop_{m['x']}_{m['y']}_{ts}.jpg"
-            subprocess.run(['magick',str(scaled),'-crop',f"{m['w']}x{m['h']}+{mx}+{my}",'+repage',str(cp)],check=True)
-            out_crops[(m.get('screen_x',m['x']),m.get('screen_y',m['y']))]=str(cp)
 
-def _build_crops(state, ts, use_physical=False):
+    def _render_res(m):
+        rw=m.get('render_w') or m.get('phys_w', m['w'])
+        rh=m.get('render_h') or m.get('phys_h', m['h'])
+        return int(rw), int(rh)
+
+    def _output_res(m):
+        return int(m.get('phys_w', m['w'])), int(m.get('phys_h', m['h']))
+
+    # Scale the span image so every monitor gets at least its render resolution
+    sc=max(max(_render_res(m)[0]/m['w'], _render_res(m)[1]/m['h']) for m in mon_list)
+    ptw=round(tw*sc); pth=round(th*sc)
+    psw=ptw+2*round(abs(ox)*sc); psh=pth+2*round(abs(oy)*sc)
+    r=subprocess.run(['magick',img,'-resize',f'{psw}x{psh}^','-gravity','Center',
+                      '-crop',f'{ptw}x{pth}+{round(ox*sc)}+{round(oy*sc)}',
+                      '+repage',str(scaled)],capture_output=True)
+    if r.returncode: return
+    for m in mon_list:
+        mx=round((m['x']-tx)*sc); my=round((m['y']-ty)*sc)
+        rw,rh=_render_res(m); pw,ph=_output_res(m)
+        cp=WALL_DIR/f"crop_{m['x']}_{m['y']}_{ts}.jpg"
+        cmd=['magick',str(scaled),'-crop',f'{rw}x{rh}+{mx}+{my}','+repage']
+        if (rw,rh)!=(pw,ph):
+            cmd+=['-resize',f'{pw}x{ph}!']
+        cmd.append(str(cp))
+        subprocess.run(cmd,check=True)
+        out_crops[(m.get('screen_x',m['x']),m.get('screen_y',m['y']))]=str(cp)
+
+def _build_crops(state, ts):
     ms=state['monitors']; groups_cfg={g['name']:g for g in state.get('groups',[])}
     WALL_DIR.mkdir(parents=True,exist_ok=True)
     for f in WALL_DIR.glob('crop_*.jpg'): f.unlink(missing_ok=True)
@@ -251,13 +253,13 @@ def _build_crops(state, ts, use_physical=False):
         g=groups_cfg.get(gname,{}); gi=g.get('img','')
         if not gi or not os.path.isfile(gi):
             global_ms.extend(gmons); del group_ms[gname]
-    _apply_mon_set(global_ms,state.get('img',''),state.get('ox',0),state.get('oy',0),crops,ts,use_physical)
+    _apply_mon_set(global_ms,state.get('img',''),state.get('ox',0),state.get('oy',0),crops,ts)
     for gname,gmons in group_ms.items():
         g=groups_cfg.get(gname,{})
-        _apply_mon_set(gmons,g.get('img',''),g.get('ox',0),g.get('oy',0),crops,ts,use_physical)
+        _apply_mon_set(gmons,g.get('img',''),g.get('ox',0),g.get('oy',0),crops,ts)
     for m in override_ms:
         ov=m['override']
-        _apply_mon_set([m],ov.get('img',''),ov.get('ox',0),ov.get('oy',0),crops,ts,use_physical)
+        _apply_mon_set([m],ov.get('img',''),ov.get('ox',0),ov.get('oy',0),crops,ts)
     return crops
 
 def _apply_state_kde(state, ts):
@@ -289,7 +291,7 @@ def _apply_state_kde(state, ts):
 
 def _apply_state_hyprland(state, ts):
     ms=state['monitors']; groups_cfg={g['name']:g for g in state.get('groups',[])}
-    crops=_build_crops(state,ts,use_physical=True)
+    crops=_build_crops(state,ts)
     if not crops:
         raise RuntimeError("No wallpaper images applied (check image paths).")
     # map (screen_x,screen_y) -> monitor name
@@ -566,7 +568,9 @@ class Canvas(QWidget):
 
             p.setPen(Qt.GlobalColor.white)
             f=QFont(); f.setPointSize(8); p.setFont(f)
-            label=f"{m['name']}\n{m['w']}×{m['h']}" + ("\n[disabled]" if is_dis else "")
+            rw=m.get('render_w'); rh=m.get('render_h')
+            render_str=(f"\n@ {rw}×{rh}" if rw and rh else "")
+            label=f"{m['name']}\n{m['w']}×{m['h']}{render_str}" + ("\n[disabled]" if is_dis else "")
             p.drawText(self.mr(m),Qt.AlignmentFlag.AlignCenter,label)
 
             if not is_locked and not is_dis:
@@ -906,6 +910,14 @@ class App(QMainWindow):
             sp.editingFinished.connect(self._mon_dims_changed)
         fmon.addRow("X:",self._sp_mx); fmon.addRow("Y:",self._sp_my)
         fmon.addRow("W:",self._sp_mw); fmon.addRow("H:",self._sp_mh)
+        self._lbl_phys=QLabel("—"); fmon.addRow("Display res:",self._lbl_phys)
+        self._sp_rw=QSpinBox(); self._sp_rw.setRange(0,9999); self._sp_rw.setSpecialValueText("auto")
+        self._sp_rh=QSpinBox(); self._sp_rh.setRange(0,9999); self._sp_rh.setSpecialValueText("auto")
+        self._sp_rw.setToolTip("Render width: crop at this resolution, then scale to display res. 0 = use display res.")
+        self._sp_rh.setToolTip("Render height: crop at this resolution, then scale to display res. 0 = use display res.")
+        self._sp_rw.editingFinished.connect(self._mon_render_changed)
+        self._sp_rh.editingFinished.connect(self._mon_render_changed)
+        fmon.addRow("Render W:",self._sp_rw); fmon.addRow("Render H:",self._sp_rh)
         self._btn_color=QPushButton("Color…"); self._btn_color.clicked.connect(self._pick_mon_color)
         fmon.addRow(self._btn_color)
         self._grp_combo=QComboBox(); self._grp_combo.activated.connect(self._mon_group_changed)
@@ -992,6 +1004,10 @@ class App(QMainWindow):
         self._chk_dis_mon.blockSignals(False)
         for sp,k in ((self._sp_mx,'x'),(self._sp_my,'y'),(self._sp_mw,'w'),(self._sp_mh,'h')):
             sp.blockSignals(True); sp.setValue(int(m[k])); sp.blockSignals(False)
+        pw=m.get('phys_w',m['w']); ph=m.get('phys_h',m['h'])
+        self._lbl_phys.setText(f"{int(pw)}×{int(ph)}")
+        for sp,k in ((self._sp_rw,'render_w'),(self._sp_rh,'render_h')):
+            sp.blockSignals(True); sp.setValue(int(m.get(k) or 0)); sp.blockSignals(False)
         col=m.get('color')
         self._btn_color.setStyleSheet(f"background:{col};" if col else "")
         # Group combo
@@ -1032,6 +1048,13 @@ class App(QMainWindow):
         m['w']=self._sp_mw.value(); m['h']=self._sp_mh.value()
         m['pts']=None; m.pop('orig_rect',None)
         self.cv._refit(); self.cv.update(); self.cv.changed.emit()
+
+    def _mon_render_changed(self):
+        m=self._sel_mon()
+        if not m: return
+        rw=self._sp_rw.value(); rh=self._sp_rh.value()
+        m['render_w']=rw or None; m['render_h']=rh or None
+        self.cv.changed.emit()
 
     def _pick_mon_color(self):
         m=self._sel_mon()
@@ -1310,6 +1333,7 @@ def run_cli(argv):
     sub.add_parser('restore'); sub.add_parser('profiles')
     ps=sub.add_parser('save'); ps.add_argument('name')
     pd=sub.add_parser('delete'); pd.add_argument('name')
+    sub.add_parser('reinstall',help='Delete all data and reinstall from GitHub')
     args=p.parse_args(argv)
     if args.cmd is None: return False
     try:
@@ -1323,6 +1347,18 @@ def run_cli(argv):
             fake={'monitors':load_saved_monitors(read_monitors()),'img':img,'ox':ox,'oy':oy,'groups':[]}
             save_profile(args.name,fake); print(f"Saved profile: {args.name}")
         elif args.cmd=='delete': delete_profile(args.name); print(f"Deleted: {args.name}")
+        elif args.cmd=='reinstall':
+            print("WARNING: This will permanently delete all saved profiles,")
+            print(f"monitor configs, and cached wallpapers in {WALL_DIR}")
+            print()
+            ans=input("Type 'yes' to confirm: ").strip().lower()
+            if ans!='yes': print("Aborted."); sys.exit(0)
+            if WALL_DIR.exists():
+                shutil.rmtree(str(WALL_DIR)); print(f"Deleted {WALL_DIR}")
+            print("Reinstalling from GitHub...")
+            subprocess.run(['pipx','install','--force',
+                            'git+https://github.com/ZoeWithTheE/easy-wallpaper-span'],check=True)
+            print("Done.")
         elif args.cmd=='apply':
             if args.profile:
                 pr=load_profile(args.profile)
