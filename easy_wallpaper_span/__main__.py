@@ -122,8 +122,8 @@ def read_monitors_hyprland():
         # transforms 1,3,5,7 are 90/270° rotations — swap logical dimensions
         if m.get('transform',0) in (1,3,5,7): pw,ph=ph,pw
         lw=round(pw/scale); lh=round(ph/scale)
-        mons.append(dict(name=m['name'],x=m['x'],y=m['y'],
-                         screen_x=m['x'],screen_y=m['y'],
+        mons.append(dict(name=m['name'],x=int(m['x']),y=int(m['y']),
+                         screen_x=int(m['x']),screen_y=int(m['y']),
                          w=lw,h=lh,phys_w=pw,phys_h=ph,
                          phys_w_mm=0.0,phys_h_mm=0.0,
                          scale=scale,rotation='normal'))
